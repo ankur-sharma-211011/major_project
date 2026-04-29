@@ -2,93 +2,202 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import date
-import os
-from PIL import Image
 
-import main5  # your final backend
+import main5
 from machine_learning_strategies_revised import (
     generate_investor_views,
     download_stock_data,
 )
 
-st.set_page_config(page_title="AI Portfolio Dashboard", layout="wide")
+# =========================================================
+# PAGE CONFIG
+# =========================================================
+st.set_page_config(
+    page_title="Intelligent Portfolio Strategy Terminal",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-# ===================== HEADER =====================
-st.title("📊 AI-Powered Portfolio Dashboard")
-st.markdown("ML Views → Strategy Comparison → Final Investment Decision")
+# =========================================================
+# STYLING
+# =========================================================
+st.markdown(
+    """
+<style>
 
-# ===================== SIDEBAR =====================
+html, body, [class*="css"] {
+    font-family: Inter;
+}
+
+.main {
+    background: linear-gradient(180deg,#08111f,#111827);
+}
+
+.block-container {
+    padding-top:1.5rem;
+    padding-bottom:2rem;
+}
+
+h1,h2,h3 {
+    color:white;
+}
+
+div[data-testid="metric-container"]{
+    background: #111827;
+    border: 1px solid #374151;
+    padding:18px;
+    border-radius:18px;
+    box-shadow: 0px 2px 12px rgba(0,0,0,.35);
+}
+
+.strategy-box{
+    background:#111827;
+    padding:22px;
+    border-radius:18px;
+    border:1px solid #374151;
+    margin-bottom:15px;
+}
+
+.big-number{
+    font-size:34px;
+    font-weight:700;
+    color:#60a5fa;
+}
+
+.small-label{
+    font-size:14px;
+    color:#9ca3af;
+}
+
+hr {
+    border:1px solid #374151;
+}
+
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+# =========================================================
+# HEADER
+# =========================================================
+st.title("📊 Intelligent Portfolio Strategy Terminal")
+st.caption(
+    "Machine Learning Views • Black-Litterman Optimization • Backtested Allocation Decisions"
+)
+
+# =========================================================
+# SIDEBAR
+# =========================================================
 with st.sidebar:
-    st.header("⚙️ Configuration")
 
-    tickers_input = st.text_input("Tickers", "AAPL,MSFT,GOOGL")
-    tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
+    st.header("⚙ Configuration")
 
-    market_rep = st.text_input("Market Benchmark", "SPY")
-
-    start_date = st.date_input("Start Date", date(2018, 1, 1))
-    end_date = st.date_input("End Date", date(2023, 12, 31))
-
-    backtest_start = st.date_input("Backtest Start", date(2020, 1, 1))
-    backtest_end = st.date_input("Backtest End", date(2022, 12, 31))
-
-    risk_free_rate = st.number_input("Risk Free Rate", value=0.04)
-    target_volatility = st.number_input("Target Volatility", value=0.3)
-
-    min_weight = st.number_input("Min Weight", value=0.01)
-    max_weight = st.number_input("Max Weight", value=0.4)
-
-    forward_days = st.number_input("Forward Days", value=20)
-    model_type = st.selectbox(
-        "Model", ["XGBoost", "Random Forest", "Linear Regression"]
+    tickers_input = st.text_input(
+        "Portfolio Universe", "DE, AGCO, ADM, BG, CF, FMC, MOO, DBA, GLD, TLT"
     )
 
-    run_views = st.button("🔍 Generate ML Views")
-    run_pipeline = st.button("🚀 Run Full Pipeline")
+    tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
 
-# ===================== TABS =====================
-tab1, tab2 = st.tabs(["📊 ML Insights", "📈 Strategy Analysis"])
+    market_rep = st.text_input("Benchmark", "MOO")
 
-# ===================== TAB 1: ML VIEWS =====================
+    st.divider()
+
+    st.subheader("Dates")
+
+    start_date = st.date_input("Training Start", date(2014, 1, 1))
+
+    end_date = st.date_input("Training End", date(2026, 2, 1))
+
+    backtest_start = st.date_input("Backtest Start", date(2026, 2, 1))
+
+    backtest_end = st.date_input("Backtest End", date(2026, 4, 1))
+
+    st.divider()
+
+    st.subheader("Methodology")
+
+    st.info("Risk-Free Rate fixed internally")
+    st.info("Target Volatility selected via volatility sweep")
+
+    st.divider()
+
+    forward_days = st.number_input("Forward Days", value=20)
+
+    model_type = st.selectbox(
+        "ML Model", ["XGBoost", "Random Forest", "Linear Regression"]
+    )
+
+    run_views = st.button("🔍 Generate ML Views", use_container_width=True)
+
+    run_pipeline = st.button("🚀 Run Full Pipeline", use_container_width=True)
+
+# =========================================================
+# TABS
+# =========================================================
+tab1, tab2 = st.tabs(["📈 ML Insights", "🧠 Strategy Analysis"])
+
+# =========================================================
+# TAB 1
+# =========================================================
 with tab1:
+
     if run_views:
-        st.subheader("ML Predicted Returns & Confidence")
 
-        results = []
+        st.subheader("Predicted Returns")
 
-        for t in tickers:
+        ml_results = []
+
+        for ticker in tickers:
+
             try:
                 pred, conf = generate_investor_views(
-                    t,
+                    ticker,
                     str(start_date),
                     str(end_date),
                     model_type=model_type,
                     forward_days=forward_days,
                 )
-                pred, conf = float(pred), float(conf)
+
+                pred = float(pred)
+                conf = float(conf)
+
             except:
-                pred, conf = np.nan, 0
+                pred = np.nan
+                conf = 0
 
-            df = download_stock_data(t, str(start_date), str(end_date))
+            prices = download_stock_data(ticker, str(start_date), str(end_date))
 
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                st.line_chart(df["Adj Close"])
-            with col2:
-                st.metric(f"{t}", f"{pred*100:.2f}%", f"Conf: {conf:.2f}")
+            left, right = st.columns([2, 1])
 
-            results.append({"Ticker": t, "Predicted Return": pred, "Confidence": conf})
+            with left:
+                if "Adj Close" in prices.columns:
+                    st.line_chart(prices["Adj Close"])
 
-        df = pd.DataFrame(results)
+            with right:
+                st.metric(ticker, f"{pred*100:.2f}%", f"Confidence {conf:.2f}")
+
+            ml_results.append(
+                {"Ticker": ticker, "Predicted Return": pred, "Confidence": conf}
+            )
+
+        df = pd.DataFrame(ml_results).sort_values("Predicted Return", ascending=False)
+
+        st.subheader("Opportunity Ranking")
+
         st.dataframe(df)
+
         st.bar_chart(df.set_index("Ticker")["Predicted Return"])
 
-# ===================== TAB 2: FULL PIPELINE =====================
+# =========================================================
+# TAB 2
+# =========================================================
 with tab2:
-    if run_pipeline:
-        st.subheader("Strategy Comparison & Backtest Results")
 
-        with st.spinner("Running full pipeline..."):
+    if run_pipeline:
+
+        with st.spinner("Running optimization..."):
+
             results = main5.full_pipeline(
                 tickers=tickers,
                 allocations={t: 1 / len(tickers) for t in tickers},
@@ -98,54 +207,126 @@ with tab2:
                 backtest_start=str(backtest_start),
                 backtest_end=str(backtest_end),
                 post_bt_end=str(end_date),
-                risk_free_rate=risk_free_rate,
-                target_volatility=target_volatility,
-                min_weight=min_weight,
-                max_weight=max_weight,
                 forward_days=forward_days,
                 model_type=model_type,
             )
 
-        st.success("Pipeline completed")
+        st.success("Pipeline Complete")
 
-        # ================= WEIGHTS =================
-        st.subheader("⚖️ Portfolio Allocations")
-        weights = results.get("portfolio_weights", {})
+        weights = results["portfolio_weights"]
+        metrics = results["performance_metrics"]
 
-        for strategy, w in weights.items():
-            st.markdown(f"### {strategy.upper()}")
-            st.bar_chart(pd.DataFrame.from_dict(w, orient="index", columns=["Weight"]))
+        best = max(metrics, key=lambda x: metrics[x]["sharpe_ratio"])
 
-        # ================= METRICS =================
-        st.subheader("📊 Strategy Performance Comparison")
-        metrics = results.get("performance_metrics", {})
+        selected_vol = results["selected_target_volatility"]
 
-        if metrics:
-            df_metrics = pd.DataFrame(metrics).T
-            st.dataframe(df_metrics)
-            st.bar_chart(df_metrics[["sharpe_ratio", "sortino_ratio", "calmar_ratio"]])
+        bl_return = metrics["ML Black-Litterman"]["total_return_percent"]
+        mvo_return = metrics["MVO"]["total_return_percent"]
 
-            # BEST STRATEGY
-            best = max(metrics, key=lambda x: metrics[x]["sharpe_ratio"])
-            st.success(f"🏆 Best Performing Strategy: {best}")
+        excess_return = bl_return - mvo_return
 
-        # ================= CHART =================
-        st.subheader("📈 Backtest Performance")
-        if os.path.exists("portfolio_comparison.png"):
-            st.image(Image.open("portfolio_comparison.png"))
+        # ========================================
+        # DASHBOARD TOP CARDS
+        # ========================================
+        st.markdown("## Portfolio Summary")
 
-        # ================= FINAL DECISION =================
-        st.subheader("🚀 Final Investment Decision")
-        bl_weights = weights.get("ml_black_litterman", {})
+        c1, c2, c3, c4, c5 = st.columns(5)
 
-        st.success("Recommended Strategy: ML Black-Litterman")
-        st.write(
-            "This strategy incorporates ML predictions + market equilibrium for optimal allocation."
+        c1.metric("Best Strategy", best)
+
+        c2.metric("Sharpe", f"{metrics[best]['sharpe_ratio']:.2f}")
+
+        c3.metric("Return", f"{metrics[best]['total_return_percent']:.2f}%")
+
+        c4.metric("Target Vol", f"{selected_vol*100:.1f}%")
+
+        c5.metric("BL Excess vs MVO", f"{excess_return:.2f}%")
+
+        st.divider()
+
+        # ========================================
+        # STRATEGY TABLE
+        # ========================================
+        st.subheader("Strategy Comparison")
+
+        metric_df = pd.DataFrame(metrics).T
+
+        st.dataframe(
+            metric_df.style.highlight_max(
+                subset=[
+                    "sharpe_ratio",
+                    "sortino_ratio",
+                    "calmar_ratio",
+                    "total_return_percent",
+                ],
+                axis=0,
+            )
         )
-        st.bar_chart(
-            pd.DataFrame.from_dict(bl_weights, orient="index", columns=["Allocation"])
+
+        # ========================================
+        # BACKTEST CHART
+        # ========================================
+        st.subheader("Backtest Growth")
+
+        chart_df = results["chart_data"]
+
+        if chart_df is not None:
+
+            chart_df = (chart_df / chart_df.iloc[0] - 1) * 100
+
+            st.line_chart(chart_df)
+
+        # ========================================
+        # ALLOCATIONS
+        # ========================================
+        st.subheader("Portfolio Weights")
+
+        cols = st.columns(3)
+
+        strategies = list(weights.keys())
+
+        for i, strat in enumerate(strategies):
+
+            with cols[i]:
+
+                st.markdown(f"### {strat.upper()}")
+
+                dfw = pd.DataFrame.from_dict(
+                    weights[strat], orient="index", columns=["Weight"]
+                )
+
+                st.bar_chart(dfw)
+
+        # ========================================
+        # RECOMMENDATION PANEL
+        # ========================================
+        st.divider()
+
+        st.subheader("🚀 Recommendation")
+
+        if excess_return > 0:
+            message = "Black-Litterman is outperforming MVO."
+        else:
+            message = "MVO currently exceeds Black-Litterman."
+
+        st.success(
+            f"""
+Recommended Strategy: {best}
+
+Reasoning:
+• Highest risk-adjusted performance
+
+• Selected via volatility sweep
+
+• BL vs MVO Excess Return:
+{excess_return:.2f}%
+
+• {message}
+"""
         )
 
-        # ================= RAW =================
-        st.subheader("📄 Raw Output")
-        st.json(results)
+        # ========================================
+        # RAW MODEL
+        # ========================================
+        with st.expander("View Raw Model Output"):
+            st.json(results)
