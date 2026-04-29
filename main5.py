@@ -1,188 +1,196 @@
-# This main5 is different from original main5 for serialization
+# main5 file that has volatility sweep method
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
-import seaborn as sns
-from pypfopt import EfficientFrontier, risk_models, expected_returns, black_litterman
-from pypfopt.black_litterman import market_implied_risk_aversion
 import yfinance as yf
+import warnings
+
+from pypfopt import EfficientFrontier
+from pypfopt import risk_models
+from pypfopt import expected_returns
+from pypfopt import black_litterman
+from pypfopt.black_litterman import market_implied_risk_aversion
+
 import portfolio_statistics as ps
 import machine_learning_strategies_revised as mls
-import warnings
-import json
 
 warnings.filterwarnings("ignore")
 
-
-# === JSON SERIALIZATION FIX ===
-def convert_to_serializable(obj):
-    if isinstance(obj, dict):
-        return {k: convert_to_serializable(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_to_serializable(v) for v in obj]
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, (np.float32, np.float64)):
-        return float(obj)
-    elif isinstance(obj, (np.int32, np.int64)):
-        return int(obj)
-    else:
-        return obj
+# ===============================
+# FIXED BACKEND PARAMETERS
+# ===============================
+RISK_FREE_RATE = 0.0446
+MIN_WEIGHT = 0.01
+MAX_WEIGHT = 0.20
+VOL_RANGE = np.linspace(0.05, 0.30, 21)
 
 
-# === Data Acquisition ===
+# ===============================
+# DATA
+# ===============================
 def fetch_price_data(tickers, start_date, end_date):
-    data = yf.download(tickers, start=start_date, end=end_date, auto_adjust=False)[
-        "Adj Close"
-    ]
-    return data if isinstance(data, pd.DataFrame) else data.to_frame()
+    data = yf.download(
+        tickers, start=start_date, end=end_date, auto_adjust=False, progress=False
+    )["Adj Close"]
+
+    if isinstance(data, pd.Series):
+        data = data.to_frame()
+
+    return data
 
 
-# === ML-Based View Generation ===
+# ===============================
+# ML VIEWS
+# ===============================
 def generate_views(
     tickers, start_date, end_date, model_type="XGBoost", forward_days=20
 ):
-    views, confidences = {}, {}
+
+    views = {}
+    confidences = {}
+
     for ticker in tickers:
-        view, confidence = mls.generate_investor_views(
+        view, conf = mls.generate_investor_views(
             ticker, start_date, end_date, model_type, forward_days
         )
+
         views[ticker] = view
-        confidences[ticker] = confidence
+        confidences[ticker] = conf
+
     return views, confidences
 
 
-# === Optimization: Mean-Variance ===
-def optimize_mvo(mu, S, min_weight, max_weight, target_volatility):
-    ef = EfficientFrontier(mu, S)
-    ef.add_constraint(lambda w: w >= min_weight)
-    ef.add_constraint(lambda w: w <= max_weight)
-    ef.efficient_risk(target_volatility=target_volatility)
-    return ef.clean_weights()
-
-
-# === Optimization: Black-Litterman ===
-def optimize_black_litterman(
-    S,
-    pi,
-    investor_views,
-    omega,
-    market_weights,
-    delta,
-    min_weight,
-    max_weight,
-    target_volatility,
-):
-    bl = black_litterman.BlackLittermanModel(
-        cov_matrix=S,
-        pi=pi,
-        absolute_views=investor_views,
-        omega=omega,
-        market_weights=market_weights,
-        risk_aversion=delta,
-    )
-    bl_mu = bl.bl_returns()
-    bl_cov = bl.bl_cov()
-    ef = EfficientFrontier(bl_mu, bl_cov)
-    ef.add_constraint(lambda w: w >= min_weight)
-    ef.add_constraint(lambda w: w <= max_weight)
-    ef.efficient_risk(target_volatility=target_volatility)
-    return ef.clean_weights(), bl_mu
-
-
-# === Backtesting ===
-def run_backtest(data, weight_dict, tickers):
-    weights_array = np.array([weight_dict[t] for t in tickers])
-    daily_returns = data.pct_change()
-    strat_return = daily_returns.dot(weights_array)
-    cumulative = (1 + strat_return).cumprod()
-    return strat_return, cumulative
-
-
-# === Metrics ===
+# ===============================
+# HELPERS
+# ===============================
 def extract(value):
     return float(value.values[0]) if isinstance(value, pd.Series) else float(value)
 
 
-def compute_metrics(returns, labels, risk_free_rate):
+def compute_metrics(returns, labels):
+
     metrics = {}
+
     for name, ret in zip(labels, returns):
+
         metrics[name] = {
-            "sharpe_ratio": round(extract(ps.sharpe_ratio(ret, risk_free_rate)), 4),
-            "sortino_ratio": round(extract(ps.sortino_ratio(ret, risk_free_rate)), 4),
-            "calmar_ratio": round(extract(ps.calmar_ratio(ret, risk_free_rate)), 4),
+            "sharpe_ratio": round(extract(ps.sharpe_ratio(ret, RISK_FREE_RATE)), 4),
+            "sortino_ratio": round(extract(ps.sortino_ratio(ret, RISK_FREE_RATE)), 4),
+            "calmar_ratio": round(extract(ps.calmar_ratio(ret, RISK_FREE_RATE)), 4),
             "total_return_percent": round(extract((1 + ret).prod() - 1) * 100, 2),
         }
+
     return metrics
 
 
-# === Visualization ===
-def plot_and_save_cumulative(
-    cums,
-    labels,
-    metrics,
-    benchmark=None,
-    benchmark_label="Benchmark (MOO)",
-    filename="portfolio_comparison.png",
+def run_backtest(data, weights_dict, tickers):
+
+    w = np.array([weights_dict[t] for t in tickers])
+
+    returns = data.pct_change().dropna()
+
+    strat_return = returns.dot(w)
+
+    cumulative = (1 + strat_return).cumprod()
+
+    return strat_return, cumulative
+
+
+def try_optimize(mu, cov, target_vol):
+
+    try:
+        ef = EfficientFrontier(mu, cov)
+
+        ef.add_constraint(lambda w: w >= MIN_WEIGHT)
+
+        ef.add_constraint(lambda w: w <= MAX_WEIGHT)
+
+        ef.efficient_risk(target_volatility=target_vol)
+
+        return ef.clean_weights()
+
+    except:
+        return None
+
+
+# ===============================
+# VOLATILITY SWEEP
+# ===============================
+def run_volatility_sweep(
+    tickers, mu, S, pi, investor_views, omega, market_weights, delta, data_bt
 ):
-    colors = sns.color_palette(
-        "bright", n_colors=len(labels) + (1 if benchmark is not None else 0)
-    )
-    strategy_colors = {label: colors[i] for i, label in enumerate(labels)}
-    if benchmark is not None:
-        strategy_colors[benchmark_label] = colors[len(labels)]
 
-    fig, ax = plt.subplots(figsize=(16, 9), constrained_layout=True)
-    fig.set_facecolor("black")
-    ax.set_facecolor("black")
-    ax.xaxis.label.set_color("white")
-    ax.yaxis.label.set_color("white")
-    ax.tick_params(axis="x", colors="white")
-    ax.tick_params(axis="y", colors="white")
-    for spine in ax.spines.values():
-        spine.set_edgecolor("white")
-    ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: "{:.2f}%".format(y)))
+    results = []
 
-    for label, line in zip(labels, cums):
-        ax.plot((line - 1) * 100, label=label, color=strategy_colors[label])
-    if benchmark is not None:
-        ax.plot(
-            (benchmark - 1) * 100,
-            label=benchmark_label,
-            color=strategy_colors[benchmark_label],
+    returns_bt = data_bt.pct_change().dropna()
+
+    for vol in VOL_RANGE:
+
+        try:
+            bl = black_litterman.BlackLittermanModel(
+                cov_matrix=S,
+                pi=pi,
+                absolute_views=investor_views,
+                omega=omega,
+                market_weights=market_weights,
+                risk_aversion=delta,
+            )
+
+            bl_mu = bl.bl_returns()
+            bl_cov = bl.bl_cov()
+
+        except:
+            continue
+
+        weights = try_optimize(bl_mu, bl_cov, vol)
+
+        if weights is None:
+            continue
+
+        w_bl = np.array([weights[t] for t in tickers])
+
+        ret_bl = returns_bt.dot(w_bl)
+
+        bl_return = float((1 + ret_bl).prod() - 1)
+
+        # MVO at same volatility
+        weights_mvo = try_optimize(mu, S, vol)
+
+        if weights_mvo is None:
+            continue
+
+        w_mvo = np.array([weights_mvo[t] for t in tickers])
+
+        ret_mvo = returns_bt.dot(w_mvo)
+
+        mvo_return = float((1 + ret_mvo).prod() - 1)
+
+        # objective = excess return over MVO
+        excess_over_mvo = bl_return - mvo_return
+
+        results.append(
+            {
+                "vol": vol,
+                "weights": weights,
+                "bl_return": bl_return,
+                "mvo_return": mvo_return,
+                "excess_over_mvo": excess_over_mvo,
+            }
         )
 
-    for i, label in enumerate(labels):
-        m = metrics[label]
-        y_pos = 0.78 - i * 0.1
-        text = f"{label}:\nSharpe: {m['sharpe_ratio']:.2f}\nSortino: {m['sortino_ratio']:.2f}\nCalmar: {m['calmar_ratio']:.2f}\nReturn: {m['total_return_percent']:.2f}%"
-        fig.text(
-            0.07,
-            y_pos,
-            text,
-            transform=fig.transFigure,
-            fontsize=10,
-            color="white",
-            bbox=dict(
-                boxstyle="round,pad=0.3",
-                edgecolor=strategy_colors[label],
-                facecolor="black",
-            ),
-        )
+    if len(results) == 0:
+        raise RuntimeError("No feasible volatility found")
 
-    ax.set_title("Cumulative Portfolio Returns", color="white")
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Gain (%)")
-    ax.legend(loc="best")
-    ax.grid(True)
+    # best = max(results, key=lambda x: x["return"])
 
-    plt.savefig(filename, format="png", dpi=300, bbox_inches="tight", facecolor="black")
-    plt.close(fig)
+    best = max(results, key=lambda x: x["excess_over_mvo"])
+
+    return best
 
 
-# === Full Pipeline ===
+# ===============================
+# MAIN PIPELINE
+# ===============================
 def full_pipeline(
     tickers,
     allocations,
@@ -192,66 +200,90 @@ def full_pipeline(
     backtest_start,
     backtest_end,
     post_bt_end,
-    risk_free_rate=0.04,
-    target_volatility=0.3,
-    min_weight=0.01,
-    max_weight=0.2,
     forward_days=20,
     model_type="XGBoost",
 ):
+
+    # TRAINING DATA
     price_data = fetch_price_data(tickers, start_date, end_date)
+
     market_data = fetch_price_data(market_rep, start_date, end_date)
 
     mu = expected_returns.mean_historical_return(price_data)
+
     S = risk_models.sample_cov(price_data)
+
     delta = market_implied_risk_aversion(market_data)
+
     pi = expected_returns.capm_return(price_data, market_prices=market_data)
 
+    # ML VIEWS
     investor_views, view_confidences = generate_views(
         tickers, start_date, end_date, model_type, forward_days
     )
+
     omega_diag = [
         1.0 / view_confidences[t] if view_confidences[t] != 0 else 1e-4
         for t in investor_views
     ]
-    omega = np.diag(omega_diag)
-    market_weights = {ticker: 1 / len(tickers) for ticker in tickers}
 
-    weights_mvo = optimize_mvo(mu, S, min_weight, max_weight, target_volatility)
-    weights_bl, bl_mu = optimize_black_litterman(
-        S,
-        pi,
-        investor_views,
-        omega,
-        market_weights,
-        delta,
-        min_weight,
-        max_weight,
-        target_volatility,
+    omega = np.diag(omega_diag)
+
+    market_weights = {t: 1 / len(tickers) for t in tickers}
+
+    # BACKTEST DATA
+    data_bt = fetch_price_data(tickers, backtest_start, backtest_end)
+
+    # VOLATILITY SWEEP
+    best = run_volatility_sweep(
+        tickers, mu, S, pi, investor_views, omega, market_weights, delta, data_bt
     )
+
+    selected_vol = best["vol"]
+    weights_bl = best["weights"]
+
+    # MVO uses SAME chosen vol
+    weights_mvo = try_optimize(mu, S, selected_vol)
+
+    if weights_mvo is None:
+
+        ef = EfficientFrontier(mu, S)
+
+        ef.add_constraint(lambda w: w >= MIN_WEIGHT)
+
+        ef.add_constraint(lambda w: w <= MAX_WEIGHT)
+
+        ef.max_sharpe()
+
+        weights_mvo = ef.clean_weights()
+
     weights_unopt = allocations
 
-    data_bt = fetch_price_data(tickers, backtest_start, backtest_end)
-    ret_mvo, cum_mvo = run_backtest(data_bt, weights_mvo, tickers)
+    # BACKTEST
     ret_bl, cum_bl = run_backtest(data_bt, weights_bl, tickers)
-    ret_unopt, cum_unopt = run_backtest(data_bt, weights_unopt, tickers)
+
+    ret_mvo, cum_mvo = run_backtest(data_bt, weights_mvo, tickers)
+
+    ret_un, cum_un = run_backtest(data_bt, weights_unopt, tickers)
 
     benchmark = fetch_price_data(market_rep, backtest_start, backtest_end)
+
     benchmark_cum = (1 + benchmark.pct_change()).cumprod()
 
-    strategy_labels = ["ML Black-Litterman", "MVO", "Unoptimized"]
-    returns = [ret_bl, ret_mvo, ret_unopt]
-    cums = [cum_bl, cum_mvo, cum_unopt]
-    metrics = compute_metrics(returns, strategy_labels, risk_free_rate)
+    # CHART DATA
+    chart_df = pd.DataFrame(
+        {
+            "ML Black-Litterman": cum_bl,
+            "MVO": cum_mvo,
+            "Unoptimized": cum_un,
+            market_rep[0]: benchmark_cum[market_rep[0]],
+        }
+    ).dropna()
 
-    plot_and_save_cumulative(
-        cums,
-        strategy_labels,
-        metrics,
-        benchmark_cum[market_rep[0]],  # ✅ FIXED
-        benchmark_label=market_rep[0],
-        filename="portfolio_comparison.png",
-    )
+    # METRICS
+    labels = ["ML Black-Litterman", "MVO", "Unoptimized"]
+
+    metrics = compute_metrics([ret_bl, ret_mvo, ret_un], labels)
 
     results = {
         "portfolio_weights": {
@@ -260,14 +292,11 @@ def full_pipeline(
             "ml_black_litterman": weights_bl,
         },
         "performance_metrics": metrics,
+        "selected_target_volatility": float(selected_vol),
+        "fixed_risk_free_rate": RISK_FREE_RATE,
+        "chart_data": chart_df,
         "views": investor_views,
         "view_confidences": view_confidences,
-        "expected_returns_bl": bl_mu.to_dict(),
     }
 
-    # ✅ FIX APPLIED HERE
-    with open("portfolio_results.json", "w") as f:
-        json.dump(convert_to_serializable(results), f, indent=4)
-
-    print("Saved chart and JSON successfully (no serialization errors)")
     return results
