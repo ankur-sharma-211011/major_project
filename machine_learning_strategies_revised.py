@@ -10,131 +10,24 @@ from sklearn.impute import SimpleImputer
 from xgboost import XGBRegressor
 import os
 
-CACHE_DIR = "price_cache"
-os.makedirs(CACHE_DIR, exist_ok=True)
-
-
 def download_stock_data(tickers, start_date, end_date):
+    data = yf.download(
+        tickers, start=start_date, end=end_date, progress=False, auto_adjust=False
+    )
+    adj_close = data["Adj Close"]
 
-    # Normalize dates
-    start_date = pd.to_datetime(start_date)
-    end_date = pd.to_datetime(end_date)
+    # Handle single ticker
+    if isinstance(tickers, str):
+        # adj_close might already be a DataFrame (depending on yfinance version), so double-check
+        if isinstance(adj_close, pd.Series):
+            adj_close = adj_close.to_frame()
+        adj_close.columns = ["Adj Close"]
 
-    # ==========================================
-    # MULTI-TICKER CASE
-    # ==========================================
-    if isinstance(tickers, (list, tuple)):
-        dfs = []
-
-        for ticker in tickers:
-            df = download_stock_data(ticker, start_date, end_date)
-            df = df.rename(columns={"Adj Close": f"{ticker}_Adj Close"})
-            dfs.append(df)
-
-        return pd.concat(dfs, axis=1)
-
-    # ==========================================
-    # SINGLE TICKER CASE
-    # ==========================================
-    ticker = tickers
-    file_path = os.path.join(CACHE_DIR, f"{ticker}.csv")
-
-    df = pd.DataFrame()
-
-    # ------------------------------------------
-    # LOAD CACHE (with corruption handling)
-    # ------------------------------------------
-    if os.path.exists(file_path):
-        try:
-            df = pd.read_csv(file_path, index_col=0)
-
-            # Remove corrupted rows
-            df = df[~df.index.astype(str).str.contains("Ticker|Date|Price", na=False)]
-
-            # Convert index safely
-            df.index = pd.to_datetime(df.index, errors="coerce")
-
-            # Drop invalid rows
-            df = df[~df.index.isna()]
-
-            # Keep only numeric
-            df = df.apply(pd.to_numeric, errors="coerce")
-            df = df.dropna()
-
-        except Exception:
-            print(f"{ticker} cache corrupted → resetting")
-            os.remove(file_path)
-            df = pd.DataFrame()
-
-    # ------------------------------------------
-    # DETERMINE MISSING RANGE
-    # ------------------------------------------
-    need_download = False
-
-    if df.empty:
-        need_download = True
-        dl_start = start_date
-        dl_end = end_date
-
+    # Handle multiple tickers
     else:
-        cached_start = df.index.min()
-        cached_end = df.index.max()
+        adj_close.columns = [f"{col}_Adj Close" for col in adj_close.columns]
 
-        if start_date < cached_start:
-            need_download = True
-            dl_start = start_date
-            dl_end = cached_start - pd.Timedelta(days=1)
-
-        elif end_date > cached_end:
-            need_download = True
-            dl_start = cached_end + pd.Timedelta(days=1)
-            dl_end = end_date
-
-    # ------------------------------------------
-    # DOWNLOAD MISSING DATA
-    # ------------------------------------------
-    if need_download:
-        try:
-            new_data = yf.download(
-                ticker,
-                start=dl_start,
-                end=dl_end,
-                progress=False,
-                auto_adjust=False,
-            )
-
-            if not new_data.empty and "Adj Close" in new_data:
-                new_data = new_data[["Adj Close"]]
-
-                df = pd.concat([df, new_data])
-                df = df[~df.index.duplicated(keep="last")]
-                df.sort_index(inplace=True)
-
-                # 🔒 SAVE CLEAN FORMAT ONLY
-                clean_df = df.copy()
-                clean_df = clean_df[["Adj Close"]]
-                clean_df.index.name = "Date"
-
-                clean_df.to_csv(file_path)
-
-        except Exception as e:
-            print(f"{ticker} download failed: {e}")
-
-    # ------------------------------------------
-    # FINAL SLICE
-    # ------------------------------------------
-    df = df.loc[start_date:end_date]
-
-    if df.empty:
-        raise ValueError(f"No data available for {ticker}")
-
-    # ------------------------------------------
-    # ENSURE ORIGINAL FORMAT
-    # ------------------------------------------
-    df = df.copy()
-    df.columns = ["Adj Close"]
-
-    return df
+    return adj_close
 
 
 def create_additional_features(stock_data):
