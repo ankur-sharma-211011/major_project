@@ -192,13 +192,46 @@ with tab1:
 # =========================================================
 # TAB 2
 # =========================================================
+# with tab2:
+
+#     if run_pipeline:
+
+#         with st.spinner("Running optimization..."):
+
+#             results = main5.full_pipeline(
+#                 tickers=tickers,
+#                 allocations={t: 1 / len(tickers) for t in tickers},
+#                 market_rep=[market_rep],
+#                 start_date=str(start_date),
+#                 end_date=str(end_date),
+#                 backtest_start=str(backtest_start),
+#                 backtest_end=str(backtest_end),
+#                 post_bt_end=str(end_date),
+#                 forward_days=forward_days,
+#                 model_type=model_type,
+#             )
+
+#         st.success("Pipeline Complete")
+
+#         weights = results["portfolio_weights"]
+#         metrics = results["performance_metrics"]
+
+#         best = max(metrics, key=lambda x: metrics[x]["sharpe_ratio"])
+
+#         selected_vol = results["selected_target_volatility"]
+
+#         bl_return = metrics["ML Black-Litterman"]["total_return_percent"]
+#         mvo_return = metrics["MVO"]["total_return_percent"]
+
+#         excess_return = bl_return - mvo_return
+
 with tab2:
 
     if run_pipeline:
 
         with st.spinner("Running optimization..."):
 
-            results = main5.full_pipeline(
+            st.session_state["results"] = main5.full_pipeline(
                 tickers=tickers,
                 allocations={t: 1 / len(tickers) for t in tickers},
                 market_rep=[market_rep],
@@ -211,13 +244,16 @@ with tab2:
                 model_type=model_type,
             )
 
+    results = st.session_state.get("results")
+
+    if results:
+
         st.success("Pipeline Complete")
 
         weights = results["portfolio_weights"]
         metrics = results["performance_metrics"]
 
         best = max(metrics, key=lambda x: metrics[x]["sharpe_ratio"])
-
         selected_vol = results["selected_target_volatility"]
 
         bl_return = metrics["ML Black-Litterman"]["total_return_percent"]
@@ -225,6 +261,7 @@ with tab2:
 
         excess_return = bl_return - mvo_return
 
+        # (keep your UI exactly same below)
         # ========================================
         # DASHBOARD TOP CARDS
         # ========================================
@@ -309,8 +346,7 @@ with tab2:
         else:
             message = "MVO currently exceeds Black-Litterman."
 
-        st.success(
-            f"""
+        st.success(f"""
 Recommended Strategy: {best}
 
 Reasoning:
@@ -322,11 +358,36 @@ Reasoning:
 {excess_return:.2f}%
 
 • {message}
-"""
-        )
+""")
 
         # ========================================
         # RAW MODEL
         # ========================================
         with st.expander("View Raw Model Output"):
             st.json(results)
+
+# ========================================
+# POST BACKTEST ALLOCATION
+# ========================================
+results = st.session_state.get("results")
+
+if results:
+
+    st.divider()
+    st.subheader("📌 Post-Backtest Allocation (Live Strategy)")
+
+    post_weights = results.get("post_backtest_weights", {})
+
+    if post_weights:
+
+        df_post = pd.DataFrame.from_dict(
+            post_weights, orient="index", columns=["Weight"]
+        )
+
+        st.bar_chart(df_post)
+        st.dataframe(df_post.sort_values("Weight", ascending=False))
+
+        st.info(
+            "These weights are re-trained using data up to the end of backtest. "
+            "This represents the actual deployable portfolio."
+        )
