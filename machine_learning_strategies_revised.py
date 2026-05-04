@@ -7,7 +7,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
-from xgboost import XGBRegressor
 import os
 
 def download_stock_data(tickers, start_date, end_date):
@@ -167,6 +166,7 @@ def generate_investor_views(ticker, start_date, end_date, model_type='XGBoost', 
     elif model_type == 'Linear Regression':
         model = LinearRegression()
     elif model_type == 'XGBoost':
+        from xgboost import XGBRegressor
         model = XGBRegressor(n_estimators=100, random_state=42, verbosity=0)
     else:
         print("Please choose a valid model and try again!")
