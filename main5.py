@@ -147,6 +147,17 @@ def run_volatility_sweep(
         if weights is None:
             continue
 
+        # w = np.array([weights[t] for t in tickers])
+
+        # port_ret = returns_bt.dot(w)
+
+        # total_return = float((1 + port_ret).prod() - 1)
+
+        # results.append({"vol": vol, "weights": weights, "return": total_return})
+
+        # Upgraded volatility sweep
+
+        # BL return
         w_bl = np.array([weights[t] for t in tickers])
 
         ret_bl = returns_bt.dot(w_bl)
@@ -186,6 +197,78 @@ def run_volatility_sweep(
     best = max(results, key=lambda x: x["excess_over_mvo"])
 
     return best
+
+
+def compute_post_backtest_allocation(
+    tickers,
+    market_rep,
+    start_date,
+    post_bt_end,
+    selected_vol,
+    forward_days=20,
+    model_type="XGBoost",
+):
+    # import numpy as np
+    # from pypfopt import expected_returns, risk_models, black_litterman
+    # from pypfopt.black_litterman import market_implied_risk_aversion
+
+    # ===============================
+    # DATA
+    # ===============================
+    price_data = fetch_price_data(tickers, start_date, post_bt_end)
+    market_data = fetch_price_data(market_rep, start_date, post_bt_end)
+
+    # ===============================
+    # CORE INPUTS
+    # ===============================
+    mu = expected_returns.mean_historical_return(price_data)
+    S = risk_models.sample_cov(price_data)
+    delta = market_implied_risk_aversion(market_data)
+
+    pi = expected_returns.capm_return(price_data, market_prices=market_data)
+
+    # ===============================
+    # ML VIEWS
+    # ===============================
+    investor_views, view_conf = generate_views(
+        tickers, start_date, post_bt_end, model_type, forward_days
+    )
+
+    omega_diag = [
+        1.0 / view_conf[t] if view_conf[t] != 0 else 1e-4 for t in investor_views
+    ]
+    omega = np.diag(omega_diag)
+
+    market_weights = {t: 1 / len(tickers) for t in tickers}
+
+    # ===============================
+    # BLACK-LITTERMAN
+    # ===============================
+    bl = black_litterman.BlackLittermanModel(
+        cov_matrix=S,
+        pi=pi,
+        absolute_views=investor_views,
+        omega=omega,
+        market_weights=market_weights,
+        risk_aversion=delta,
+    )
+
+    bl_mu = bl.bl_returns()
+    bl_cov = bl.bl_cov()
+
+    # ===============================
+    # OPTIMIZATION
+    # ===============================
+    weights = try_optimize(bl_mu, bl_cov, selected_vol)
+
+    if weights is None:
+        ef = EfficientFrontier(bl_mu, bl_cov)
+        ef.add_constraint(lambda w: w >= MIN_WEIGHT)
+        ef.add_constraint(lambda w: w <= MAX_WEIGHT)
+        ef.max_sharpe()
+        weights = ef.clean_weights()
+
+    return weights
 
 
 # ===============================
@@ -285,12 +368,38 @@ def full_pipeline(
 
     metrics = compute_metrics([ret_bl, ret_mvo, ret_un], labels)
 
+    # RESULTS
+    # results = {
+    #     "selected_target_volatility": float(selected_vol),
+    #     "fixed_risk_free_rate": RISK_FREE_RATE,
+    #     "portfolio_weights": {
+    #         "unoptimized": weights_unopt,
+    #         "mvo": weights_mvo,
+    #         "ml_black_litterman": weights_bl,
+    #     },
+    #     "performance_metrics": metrics,
+    #     "chart_data": chart_df,
+    #     "views": investor_views,
+    #     "view_confidences": view_confidences,
+    # }
+
+    post_weights = compute_post_backtest_allocation(
+        tickers,
+        market_rep,
+        start_date,
+        post_bt_end,
+        selected_vol,
+        forward_days,
+        model_type,
+    )
+
     results = {
         "portfolio_weights": {
             "unoptimized": weights_unopt,
             "mvo": weights_mvo,
             "ml_black_litterman": weights_bl,
         },
+        "post_backtest_weights": post_weights,
         "performance_metrics": metrics,
         "selected_target_volatility": float(selected_vol),
         "fixed_risk_free_rate": RISK_FREE_RATE,
