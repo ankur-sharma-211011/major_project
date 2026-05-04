@@ -282,22 +282,33 @@ with tab2:
         st.divider()
 
         # ========================================
-        # STRATEGY TABLE
+        # STRATEGY TABLE (WITH TOOLTIPS)
         # ========================================
         st.subheader("Strategy Comparison")
 
         metric_df = pd.DataFrame(metrics).T
 
-        st.dataframe(
-            metric_df.style.highlight_max(
-                subset=[
-                    "sharpe_ratio",
-                    "sortino_ratio",
-                    "calmar_ratio",
-                    "total_return_percent",
-                ],
-                axis=0,
-            )
+        st.data_editor(
+            metric_df,
+            use_container_width=True,
+            column_config={
+                "sharpe_ratio": st.column_config.NumberColumn(
+                    "Sharpe Ratio",
+                    help="Risk-adjusted return = (Return - Risk-Free Rate) / Volatility",
+                ),
+                "sortino_ratio": st.column_config.NumberColumn(
+                    "Sortino Ratio",
+                    help="Measures return relative to downside risk only",
+                ),
+                "calmar_ratio": st.column_config.NumberColumn(
+                    "Calmar Ratio",
+                    help="Return divided by maximum drawdown",
+                ),
+                "total_return_percent": st.column_config.NumberColumn(
+                    "Total Return (%)",
+                    help="Total return over the backtest period",
+                ),
+            },
         )
 
         # ========================================
